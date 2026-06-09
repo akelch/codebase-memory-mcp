@@ -295,6 +295,12 @@ static int create_user_indexes(cbm_store_t *s) {
         "CREATE INDEX IF NOT EXISTS idx_edges_target_type ON edges(project, target_id, type);"
         "CREATE INDEX IF NOT EXISTS idx_edges_source_type ON edges(project, source_id, type);"
         "CREATE INDEX IF NOT EXISTS idx_edges_url_path ON edges(project, url_path_gen);";
+    /* NOTE: a partial expression index on json_extract(properties,'$.is_entry_point')
+     * was tried for arch_entry_points and REVERTED: json_extract in an index WHERE
+     * aborts CREATE INDEX (and thus store open) on any row whose properties JSON is
+     * malformed — and pre-fix databases contain such rows (see
+     * pipeline_def_props_valid_json_when_oversized). Revisit only with a
+     * json_valid()-guarded expression once legacy DBs have aged out. */
     return exec_sql(s, sql);
 }
 
@@ -2897,7 +2903,11 @@ static void schema_discover_props(sqlite3 *db, const char *sql, const char *proj
     *out_count = pn;
 }
 
-int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t *out) {
+/* with_props=false skips the per-label/per-type JSON property-key discovery:
+ * those json_each() scans walk EVERY row of each label/type (minutes-scale on
+ * multi-million-node graphs) and get_architecture only needs the counts. */
+static int get_schema_impl(cbm_store_t *s, const char *project, cbm_schema_info_t *out,
+                           bool with_props) {
     memset(out, 0, sizeof(*out));
     if (!s || !s->db) {
         return CBM_NOT_FOUND;
@@ -2950,7 +2960,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
     }
 
     /* Node label property keys: base columns + distinct JSON property keys per label */
-    {
+    if (with_props) {
         static const char *node_base_cols[] = {"name", "qualified_name", "file_path", "start_line",
                                                "end_line"};
         const char *prop_sql = "SELECT DISTINCT je.key "
@@ -3018,7 +3028,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
     }
 
     /* Edge type property keys: base columns + distinct JSON property keys per type */
-    {
+    if (with_props) {
         static const char *edge_base_cols[] = {"source_id", "target_id"};
         const char *prop_sql = "SELECT DISTINCT je.key "
                                "FROM edges, json_each(edges.properties) AS je "
@@ -3036,6 +3046,14 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
     }
 
     return CBM_STORE_OK;
+}
+
+int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t *out) {
+    return get_schema_impl(s, project, out, true);
+}
+
+int cbm_store_get_schema_counts(cbm_store_t *s, const char *project, cbm_schema_info_t *out) {
+    return get_schema_impl(s, project, out, false);
 }
 
 void cbm_store_schema_free(cbm_schema_info_t *out) {
