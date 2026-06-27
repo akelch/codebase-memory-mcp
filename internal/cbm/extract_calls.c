@@ -889,6 +889,35 @@ static char *extract_func_callee(CBMArena *a, TSNode node, const char *source, c
     return ts_node_is_null(fn) ? NULL : cbm_node_text(a, fn, source);
 }
 
+// Nix: an `apply_expression` (`f x`) carries the applied function on its
+// `function:` field. The head is a `variable_expression` whose `name` is the
+// callee identifier; curried application (`f x y`) nests apply_expressions, so
+// descend the `function` chain to the head variable_expression. The generic
+// field resolver does not recognise `variable_expression`, so without this the
+// call to `addOne` would never be captured.
+static char *extract_nix_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
+    if (strcmp(nk, "apply_expression") != 0) {
+        return NULL;
+    }
+    TSNode fn = ts_node_child_by_field_name(node, TS_FIELD("function"));
+    for (int depth = 0; depth < 8 && !ts_node_is_null(fn); depth++) {
+        const char *fk = ts_node_type(fn);
+        if (strcmp(fk, "apply_expression") == 0) {
+            fn = ts_node_child_by_field_name(fn, TS_FIELD("function"));
+            continue;
+        }
+        if (strcmp(fk, "variable_expression") == 0) {
+            TSNode nm = ts_node_child_by_field_name(fn, TS_FIELD("name"));
+            return ts_node_is_null(nm) ? NULL : cbm_node_text(a, nm, source);
+        }
+        if (strcmp(fk, "identifier") == 0) {
+            return cbm_node_text(a, fn, source);
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
 // Agda: function application `f x y` parses as an `expr` whose named children are
 // `atom`s (no dedicated application node). Treat an `expr` with >= 2 atom children
 // as a call whose callee is the head atom's identifier.
@@ -1064,6 +1093,12 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
     }
     if (lang == CBM_LANG_AGDA) {
         char *c = extract_agda_callee(a, node, source, nk);
+        if (c) {
+            return c;
+        }
+    }
+    if (lang == CBM_LANG_NIX) {
+        char *c = extract_nix_callee(a, node, source, nk);
         if (c) {
             return c;
         }

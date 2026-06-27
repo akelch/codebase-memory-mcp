@@ -2691,6 +2691,15 @@ int cbm_cmd_config(int argc, char **argv) {
 /* Global auto-answer mode: 0=interactive, 1=always yes, -1=always no */
 static int g_auto_answer = 0;
 
+/* Test seam: force the auto-answer state so non-interactive bug-repro tests
+ * can drive prompt_yn() deterministically (1 => yes, -1 => no, 0 => prompt).
+ * Not declared in cli.h (internal); the repro runner links cli.c directly and
+ * carries an extern forward declaration. Production never calls this. */
+void cbm_set_auto_answer_for_test(int value);
+void cbm_set_auto_answer_for_test(int value) {
+    g_auto_answer = value;
+}
+
 static void parse_auto_answer(int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
@@ -3335,6 +3344,59 @@ static int count_db_indexes(const char *home) {
     return count;
 }
 
+/* Handle pre-existing indexes during (re)install (#607).
+ *
+ * Returns 1 to proceed with the install, 0 to abort (user declined the
+ * destructive reset prompt).
+ *
+ * Default (reset=false): PRESERVE the indexed graph. We do NOT delete any
+ * .db. We print an honest message telling the user the indexes are kept and
+ * that they should re-index after install to pick up this version's
+ * extraction improvements. The old behaviour deleted every index here while
+ * printing "must be rebuilt" and never rebuilt — silent, irrecoverable data
+ * loss (#607). Deletion is NOT a schema requirement (the store uses CREATE
+ * TABLE IF NOT EXISTS with no migrations); it only guarded against stale
+ * content, which a re-index fixes without destroying anything.
+ *
+ * Opt-in (reset=true, via `install --reset-indexes`): keep the original
+ * prompt-and-delete behaviour, with honest "Delete" wording.
+ *
+ * Not static: linked into the bug-repro test runner so repro_issue607.c can
+ * assert the default path preserves the DB. It is intentionally NOT declared
+ * in cli.h (internal helper); the test carries an extern forward declaration.
+ */
+int cbm_install_handle_existing_indexes(const char *home, bool reset, bool dry_run);
+int cbm_install_handle_existing_indexes(const char *home, bool reset, bool dry_run) {
+    int index_count = count_db_indexes(home);
+    if (index_count <= 0) {
+        return 1; /* nothing to handle, proceed */
+    }
+
+    if (!reset) {
+        /* Default: preserve. Be honest — keep the indexes, advise re-index. */
+        printf("Found %d existing index(es). Keeping them. After install, "
+               "re-index to pick up this version's improvements:\n",
+               index_count);
+        cbm_list_indexes(home);
+        printf("\n");
+        return 1; /* proceed without deleting */
+    }
+
+    /* Opt-in reset (--reset-indexes): the original prompt-and-delete path. */
+    printf("Found %d existing index(es):\n", index_count);
+    cbm_list_indexes(home);
+    printf("\n");
+    if (!prompt_yn("Delete these indexes and continue with install?")) {
+        printf("Install cancelled.\n");
+        return 0; /* abort */
+    }
+    if (!dry_run) {
+        int removed = cbm_remove_indexes(home);
+        printf("Removed %d index(es).\n\n", removed);
+    }
+    return 1; /* proceed */
+}
+
 /* ── Subcommand: install ──────────────────────────────────────── */
 
 /* Detect the running binary's path at runtime. Falls back to ~/.local/bin/. */
@@ -3445,6 +3507,7 @@ int cbm_cmd_install(int argc, char **argv) {
     bool dry_run = false;
     bool force = false;
     bool plan = false;
+    bool reset_indexes = false;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "--dry-run") == 0) {
             dry_run = true;
@@ -3454,6 +3517,11 @@ int cbm_cmd_install(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--plan") == 0) {
             plan = true;
+        }
+        /* Opt-in: delete existing indexes during install. Default preserves
+         * the indexed graph (#607). Only this flag triggers deletion. */
+        if (strcmp(argv[i], "--reset-indexes") == 0) {
+            reset_indexes = true;
         }
     }
 
@@ -3481,19 +3549,11 @@ int cbm_cmd_install(int argc, char **argv) {
 
     printf("codebase-memory-mcp install %s\n\n", CBM_VERSION);
 
-    int index_count = count_db_indexes(home);
-    if (index_count > 0) {
-        printf("Found %d existing index(es) that must be rebuilt:\n", index_count);
-        cbm_list_indexes(home);
-        printf("\n");
-        if (!prompt_yn("Delete these indexes and continue with install?")) {
-            printf("Install cancelled.\n");
-            return CLI_TRUE;
-        }
-        if (!dry_run) {
-            int removed = cbm_remove_indexes(home);
-            printf("Removed %d index(es).\n\n", removed);
-        }
+    /* (#607) Default: preserve existing indexes. `--reset-indexes` opts into
+     * the old prompt-and-delete behaviour. The helper returns 0 only when the
+     * user declines the reset prompt, in which case we abort the install. */
+    if (cbm_install_handle_existing_indexes(home, reset_indexes, dry_run) == 0) {
+        return CLI_TRUE;
     }
 
     /* Step 1b: Kill running MCP server instances so agents pick up new config */

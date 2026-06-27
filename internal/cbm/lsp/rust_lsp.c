@@ -3625,18 +3625,62 @@ static void rust_resolve_call_expression(RustLSPContext *ctx, TSNode node) {
             }
         }
 
-        /* Global short-name fallback: scan the registry for a unique
-         * function whose short_name matches the path's tail and whose
-         * QN starts with the current crate prefix. This gives `mod
-         * foo; use foo::bar; bar()` a chance to resolve when the
-         * intermediate module wasn't tracked through an explicit
-         * use-map entry. */
         const char *tail = strrchr(path, ':');
         if (tail && tail > path && tail[-1] == ':') {
             tail += 1;
         } else {
             tail = path;
         }
+
+        /* Cross-crate workspace-member resolution (#56): when the call
+         * path's head is a declared Cargo workspace member (e.g.
+         * `crate_a::helper` from inside crate_b) we cannot rely on the
+         * caller-crate-scoped fallback below — that filters by the
+         * CALLER's module prefix and would resolve to a same-named local
+         * function instead. Route to the function defined inside the
+         * MEMBER crate by matching the registered QN's `.<member>.`
+         * path segment plus the call tail. Requires a parsed manifest
+         * (threaded through pass_lsp_cross.c); NULL manifest skips this. */
+        if (ctx->cargo_manifest && tail && *tail) {
+            const char *head_sep = strstr(path, "::");
+            if (head_sep && head_sep > path) {
+                char *head = cbm_arena_strndup(ctx->arena, path, (size_t)(head_sep - path));
+                const CBMCargoManifest *m = (const CBMCargoManifest *)ctx->cargo_manifest;
+                if (head && cbm_cargo_find_member(m, head)) {
+                    /* `.crate_a.` — the member directory appears as a dotted
+                     * QN segment for every def inside that crate. */
+                    char *needle = cbm_arena_sprintf(ctx->arena, ".%s.", head);
+                    const CBMRegisteredFunc *mem_unique = NULL;
+                    int mem_matches = 0;
+                    for (int i = 0; i < ctx->registry->func_count && mem_matches < 2; i++) {
+                        const CBMRegisteredFunc *f = &ctx->registry->funcs[i];
+                        if (!f->short_name || !f->qualified_name)
+                            continue;
+                        if (f->receiver_type)
+                            continue; /* free functions only */
+                        if (strcmp(f->short_name, tail) != 0)
+                            continue;
+                        if (!strstr(f->qualified_name, needle))
+                            continue; /* not defined in the member crate */
+                        mem_matches++;
+                        if (mem_matches == 1)
+                            mem_unique = f;
+                    }
+                    if (mem_matches == 1 && mem_unique) {
+                        rust_emit_resolved_call(ctx, mem_unique->qualified_name, "lsp_cross_crate",
+                                                CBM_RUST_CONF_DIRECT);
+                        return;
+                    }
+                }
+            }
+        }
+
+        /* Global short-name fallback: scan the registry for a unique
+         * function whose short_name matches the path's tail and whose
+         * QN starts with the current crate prefix. This gives `mod
+         * foo; use foo::bar; bar()` a chance to resolve when the
+         * intermediate module wasn't tracked through an explicit
+         * use-map entry. */
         if (tail && *tail && ctx->module_qn) {
             /* Crate prefix is the first dotted segment of module_qn after
              * the project name, but for simplicity we just match on
@@ -5121,10 +5165,12 @@ void cbm_run_rust_lsp(CBMArena *arena, CBMFileResult *result, const char *source
 
 extern const TSLanguage *tree_sitter_rust(void);
 
-void cbm_run_rust_lsp_cross(CBMArena *arena, const char *source, int source_len,
-                            const char *module_qn, CBMRustLSPDef *defs, int def_count,
-                            const char **import_names, const char **import_qns, int import_count,
-                            TSTree *cached_tree, CBMResolvedCallArray *out) {
+void cbm_run_rust_lsp_cross_with_manifest(CBMArena *arena, const char *source, int source_len,
+                                          const char *module_qn, CBMRustLSPDef *defs, int def_count,
+                                          const char **import_names, const char **import_qns,
+                                          int import_count, TSTree *cached_tree,
+                                          const struct CBMCargoManifest *manifest,
+                                          CBMResolvedCallArray *out) {
     if (!source || source_len <= 0 || !out)
         return;
 
@@ -5251,6 +5297,10 @@ void cbm_run_rust_lsp_cross(CBMArena *arena, const char *source, int source_len,
 
     RustLSPContext ctx;
     rust_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
+    /* Workspace/dependency awareness for cross-CRATE path routing (#56).
+     * Mirrors the single-file path (cbm_run_rust_lsp_with_manifest). NULL
+     * when no Cargo.toml was parsed — in-crate resolution is unaffected. */
+    ctx.cargo_manifest = manifest;
     rust_collect_uses(&ctx, root);
     for (int i = 0; i < import_count; i++) {
         if (import_names[i] && import_qns[i]) {
@@ -5264,6 +5314,18 @@ void cbm_run_rust_lsp_cross(CBMArena *arena, const char *source, int source_len,
         if (parser)
             ts_parser_delete(parser);
     }
+}
+
+/* Manifest-free entry point. Preserves the pre-existing signature used by
+ * the unit tests (test_rust_lsp.c) and the batch wrapper — delegates to
+ * the manifest-aware variant with a NULL manifest. */
+void cbm_run_rust_lsp_cross(CBMArena *arena, const char *source, int source_len,
+                            const char *module_qn, CBMRustLSPDef *defs, int def_count,
+                            const char **import_names, const char **import_qns, int import_count,
+                            TSTree *cached_tree, CBMResolvedCallArray *out) {
+    cbm_run_rust_lsp_cross_with_manifest(arena, source, source_len, module_qn, defs, def_count,
+                                         import_names, import_qns, import_count, cached_tree, NULL,
+                                         out);
 }
 
 void cbm_batch_rust_lsp_cross(CBMArena *arena, CBMBatchRustLSPFile *files, int file_count,

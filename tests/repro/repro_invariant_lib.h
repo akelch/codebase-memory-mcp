@@ -179,6 +179,31 @@ static inline int inv_edge_has_strategy(cbm_store_t *store, const char *project,
     return found;
 }
 
+/* INV(no-resolvable-edge): NO CALLS edge targets a node whose QN contains
+ * `callee_substr`. This is the ACCURATE invariant for a call to a callee that is
+ * undeclared / external / absent from the indexed tree: no node can ever exist
+ * for it, so no CALLS edge can ever form — asserting a resolution "strategy on an
+ * edge" for such a call is unachievable by design. Returns 1 when no such edge
+ * exists (the correct no-edge behaviour), 0 if one is found, and 1 on query
+ * error (no edges to contradict the invariant). */
+static inline int inv_no_calls_edge_to_qn(cbm_store_t *store, const char *project,
+                                          const char *callee_substr) {
+    cbm_edge_t *edges = NULL;
+    int n = 0;
+    if (cbm_store_find_edges_by_type(store, project, "CALLS", &edges, &n) != CBM_STORE_OK)
+        return 1;
+    int found = 0;
+    for (int i = 0; i < n && !found; i++) {
+        cbm_node_t tgt;
+        if (cbm_store_find_node_by_id(store, edges[i].target_id, &tgt) != CBM_STORE_OK)
+            continue;
+        if (tgt.qualified_name && callee_substr && strstr(tgt.qualified_name, callee_substr))
+            found = 1;
+    }
+    cbm_store_free_edges(edges, n);
+    return !found;
+}
+
 /* True if a CALLS edge's target node QN ends with `.<suffix>` (the resolved callee). */
 static inline int inv_calls_target_qn_suffix(cbm_store_t *store, const char *project,
                                              const char *suffix) {

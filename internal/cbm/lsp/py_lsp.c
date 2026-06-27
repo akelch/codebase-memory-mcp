@@ -18,6 +18,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Minimal Python builtins as real graph nodes (py_builtins_inject_defs).
+ * #included here (CGo amalgamation pattern, see lsp_all.c) — referenced
+ * only from py_lsp.c, never compiled standalone. */
+#include "py_builtins.c"
+
 // Forward decls
 static void py_resolve_calls_in(PyLSPContext *ctx, TSNode node);
 static const CBMType *py_eval_expr_type(PyLSPContext *ctx, TSNode node);
@@ -3362,6 +3367,15 @@ void cbm_run_py_lsp(CBMArena *arena, CBMFileResult *result, const char *source, 
                     TSNode root) {
     if (!arena || !result)
         return;
+
+    /* Inject minimal builtin definitions as real graph nodes (builtins.len,
+     * builtins.str, builtins.str.upper, ...). The typeshed registry already
+     * RESOLVES builtin calls (emitting the strategy + a "builtins.*" callee_qn),
+     * but pass_calls.c only writes the CALLS edge when that callee_qn maps to a
+     * graph node. We run inside cbm_extract_file, before the pipeline mints
+     * def nodes from result->defs, so these become the target nodes the
+     * builtin/constructor/method edges point at. Upsert dedups by QN. */
+    py_builtins_inject_defs(result, arena);
 
     CBMTypeRegistry reg;
     cbm_registry_init(&reg, arena);

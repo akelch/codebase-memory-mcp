@@ -773,6 +773,23 @@ TSNode cbm_resolve_func_name(TSNode node, CBMLanguage lang) {
             }
         }
 
+        /* Nix: a named function is a `function_expression` (lambda `x: body`) with
+         * no name of its own — the binding name lives on the enclosing `binding`'s
+         * `attrpath` field (`name = x: ...`). Resolve through the parent binding to
+         * the attrpath's `attr` identifier so `addOne = x: ...` mints a Function
+         * def. A lambda whose parent is not a binding (e.g. an inline `map (x: x)`
+         * argument) resolves null and stays out of func_types. */
+        if (lang == CBM_LANG_NIX && strcmp(kind, "function_expression") == 0) {
+            TSNode parent = ts_node_parent(node);
+            if (!ts_node_is_null(parent) && strcmp(ts_node_type(parent), "binding") == 0) {
+                TSNode attrpath = ts_node_child_by_field_name(parent, TS_FIELD("attrpath"));
+                if (!ts_node_is_null(attrpath)) {
+                    TSNode attr = ts_node_child_by_field_name(attrpath, TS_FIELD("attr"));
+                    return ts_node_is_null(attr) ? attrpath : attr;
+                }
+            }
+        }
+
         /* Fortran: subroutine/function wrap an inner *_statement that carries the
          * `name` field; the outer node walk_defs matched has no name itself. */
         if (lang == CBM_LANG_FORTRAN &&
@@ -3512,16 +3529,30 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     }
     // Rust/Swift/D: a struct is a distinct kind from a class — emit the precise
     // "Struct" label rather than collapsing it to "Class". Scoped to these three
-    // grammar/LSP languages whose struct node is `struct_item` (Rust) or
-    // `struct_declaration` (Swift, D). C/C++/Obj-C keep `struct_specifier` →
-    // "Class" (a C++ struct is class-like). "Struct" is a type-like container:
-    // every type-resolution / registry / IMPLEMENTS / LSP-registrar consumer
-    // routes through cbm_label_is_type_like(), so a struct still resolves as a
-    // type for its methods, fields, inheritance and impls.
+    // grammar/LSP languages. Rust's struct node is `struct_item`; D's is
+    // `struct_declaration`. C/C++/Obj-C keep `struct_specifier` → "Class"
+    // (a C++ struct is class-like). "Struct" is a type-like container: every
+    // type-resolution / registry / IMPLEMENTS / LSP-registrar consumer routes
+    // through cbm_label_is_type_like(), so a struct still resolves as a type for
+    // its methods, fields, inheritance and impls.
     if (ctx->language == CBM_LANG_RUST || ctx->language == CBM_LANG_SWIFT ||
         ctx->language == CBM_LANG_DLANG) {
         if (strcmp(kind, "struct_item") == 0 || strcmp(kind, "struct_declaration") == 0) {
             label = "Struct";
+        }
+    }
+    // Swift: tree-sitter-swift does NOT have a dedicated `struct_declaration`
+    // node — `struct`, `class` and `actor` all parse to `class_declaration`,
+    // distinguished only by the `declaration_kind` field (the leading keyword
+    // token). Read that field and emit "Struct" when the keyword is `struct`
+    // (and "Class" for `class`/`actor`, which class_label_for_kind already gives).
+    if (ctx->language == CBM_LANG_SWIFT && strcmp(kind, "class_declaration") == 0) {
+        TSNode dk = ts_node_child_by_field_name(node, TS_FIELD("declaration_kind"));
+        if (!ts_node_is_null(dk)) {
+            char *dk_text = cbm_node_text(a, dk, ctx->source);
+            if (dk_text && strcmp(dk_text, "struct") == 0) {
+                label = "Struct";
+            }
         }
     }
     // F#: a `type_definition` that has a primary constructor (`type Foo(...) =`)

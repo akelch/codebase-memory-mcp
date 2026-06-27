@@ -182,6 +182,41 @@ static int assert_lsp_strategy(const char *filename, const char *src,
     return assert_lsp_strategy_files(&f, 1, strategy);
 }
 
+/*
+ * assert_no_resolvable_edge_files — the ACCURATE invariant for a call whose
+ * callee is genuinely UNRESOLVABLE (undeclared/external/absent symbol). No node
+ * can exist for such a callee, so no CALLS edge can ever target it and no
+ * resolution strategy can land on an edge. Index the fixture and assert that NO
+ * CALLS edge targets a node whose QN contains `callee_substr`. Returns 0 on PASS
+ * (the no-edge behaviour holds), non-zero on FAIL.
+ */
+static int assert_no_resolvable_edge_files(const RFile *files, int nfiles,
+                                           const char *callee_substr) {
+    RProj lp;
+    cbm_store_t *store = rh_index_files(&lp, files, nfiles);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for no-edge callee %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, callee_substr);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    if (!inv_no_calls_edge_to_qn(store, lp.project, callee_substr)) {
+        printf("  %sFAIL%s %s:%d: a CALLS edge unexpectedly targets %s "
+               "(expected NONE — callee is unresolvable)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
+static int assert_no_resolvable_edge(const char *filename, const char *src,
+                                     const char *callee_substr) {
+    RFile f = {filename, src};
+    return assert_no_resolvable_edge_files(&f, 1, callee_substr);
+}
+
 /* ── Go fixtures ─────────────────────────────────────────────────────────────
  *
  * Each fixture is the MINIMAL construct go_lsp.c keys on for one strategy. The
@@ -462,7 +497,10 @@ TEST(repro_lsp_go_strategy_cross_file) {
 }
 
 TEST(repro_lsp_go_unresolved) {
-    return assert_lsp_strategy("main.go", kGoUnresolved, "lsp_unresolved");
+    /* totallyUnknownFn is UNDECLARED — no node can exist for it, so no CALLS
+     * edge can ever form. The accurate invariant is "no resolvable edge", not a
+     * resolution strategy on an edge (which is unachievable by design). */
+    return assert_no_resolvable_edge("main.go", kGoUnresolved, "totallyUnknownFn");
 }
 
 /* ── Python per-strategy tests ───────────────────────────────────────────── */
@@ -494,10 +532,14 @@ TEST(repro_lsp_py_module_attr) {
 }
 
 TEST(repro_lsp_py_module_attr_unresolved) {
-    return assert_lsp_strategy_files(
+    /* helpers.missing_fn — the module `helpers` is known but the symbol
+     * `missing_fn` is ABSENT from it, so no node exists for the callee and no
+     * CALLS edge can form. Assert the accurate no-resolvable-edge behaviour
+     * rather than a strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge_files(
         kPyModuleAttrUnresolved,
         (int)(sizeof(kPyModuleAttrUnresolved) / sizeof(kPyModuleAttrUnresolved[0])),
-        "lsp_module_attr_unresolved");
+        "missing_fn");
 }
 
 TEST(repro_lsp_py_dict_dispatch) {

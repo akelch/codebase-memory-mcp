@@ -716,15 +716,20 @@ TEST(repro_grammar_shells_luau) {
  *   func_kinds_generic -> Module-sourced.
  */
 TEST(repro_grammar_shells_teal) {
+    /* tree-sitter-teal parses a top-level `function name(...)` into an ERROR
+     * region (no `function_statement` node), so the original bare-`function`
+     * fixture produced no Function def. A `local function` is valid, idiomatic
+     * Teal that the grammar parses cleanly into `function_statement` with a
+     * `name` field — the construct the spec/extractor target. */
     static const char src[] =
-        "function inner(x: number): number\n"
+        "local function inner(x: number): number\n"
         "    return x + 1\n"
         "end\n"
         "\n"
-        "function outer(x: number): number\n"
+        "local function outer(x: number): number\n"
         "    return inner(x)\n"
         "end\n";
-    static const char bad[] = "function outer(x: number): number\n    return inner(";
+    static const char bad[] = "local function outer(x: number): number\n    return inner(";
     if (sh_callable_battery("Teal", src, CBM_LANG_TEAL, "mod.tl",
                             "Function", NULL, "inner") != 0)
         return 1;

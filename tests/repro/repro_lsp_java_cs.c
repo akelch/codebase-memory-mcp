@@ -153,6 +153,37 @@ static int assert_lsp_strategy(const char *filename, const char *src,
     return rc;
 }
 
+/*
+ * assert_no_resolvable_edge — the ACCURATE invariant for a call whose callee is
+ * genuinely UNRESOLVABLE: undeclared (totallyUnknownFn), an external symbol
+ * (java.lang.Math.max from an external class), or a method ABSENT from a known
+ * type (Helper.Missing / c.Missing — receiver type known, method not declared).
+ * No node can exist for such a callee, so no CALLS edge can ever target it and
+ * no resolution strategy can land on an edge. Index the single-file fixture and
+ * assert NO CALLS edge targets a node whose QN contains `callee_substr`.
+ * Returns 0 on PASS, non-zero on FAIL.
+ */
+static int assert_no_resolvable_edge(const char *filename, const char *src,
+                                     const char *callee_substr) {
+    RProj lp;
+    cbm_store_t *store = rh_index(&lp, filename, src);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for no-edge callee %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, callee_substr);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    if (!inv_no_calls_edge_to_qn(store, lp.project, callee_substr)) {
+        printf("  %sFAIL%s %s:%d: a CALLS edge unexpectedly targets %s "
+               "(expected NONE — callee is unresolvable)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
 /* ── Java fixtures ───────────────────────────────────────────────────────────
  *
  * Each fixture is the MINIMAL construct java_lsp.c keys on for one strategy. The
@@ -525,8 +556,12 @@ TEST(repro_lsp_java_static_import) {
 }
 
 TEST(repro_lsp_java_static_import_text) {
-    return assert_lsp_strategy("Client.java", kJavaStaticImportText,
-                               "lsp_static_import_text");
+    /* `import static java.lang.Math.max` — Math is EXTERNAL (not declared here),
+     * so no node exists for java.lang.Math.max and no CALLS edge can target it.
+     * The lsp_static_import_text text-fallback strategy is unachievable on an
+     * edge by design; assert the accurate no-resolvable-edge behaviour. */
+    return assert_no_resolvable_edge("Client.java", kJavaStaticImportText,
+                                     "java.lang.Math.max");
 }
 
 TEST(repro_lsp_java_super_dispatch) {
@@ -579,7 +614,10 @@ TEST(repro_lsp_java_constructor_synth) {
 }
 
 TEST(repro_lsp_java_unresolved) {
-    return assert_lsp_strategy("Client.java", kJavaUnresolved, "lsp_unresolved");
+    /* totallyUnknownFn is UNDECLARED — no node can exist for it, so no CALLS
+     * edge can ever form. Assert the accurate no-resolvable-edge behaviour
+     * instead of a resolution strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("Client.java", kJavaUnresolved, "totallyUnknownFn");
 }
 
 /* ── C# per-strategy tests ───────────────────────────────────────────────── */
@@ -589,8 +627,11 @@ TEST(repro_lsp_cs_static_typed) {
 }
 
 TEST(repro_lsp_cs_static_typed_unindexed) {
-    return assert_lsp_strategy("Client.cs", kCsStaticTypedUnindexed,
-                               "cs_static_typed_unindexed");
+    /* Helper.Missing() — the type Helper is known but the method Missing is
+     * ABSENT (Helper declares no Missing), so the synthetic target has no node
+     * and no CALLS edge can target it. Assert the accurate no-resolvable-edge
+     * behaviour instead of a strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("Client.cs", kCsStaticTypedUnindexed, "Missing");
 }
 
 TEST(repro_lsp_cs_method_typed) {
@@ -608,8 +649,11 @@ TEST(repro_lsp_cs_extension_method) {
 }
 
 TEST(repro_lsp_cs_method_typed_unindexed) {
-    return assert_lsp_strategy("Client.cs", kCsMethodTypedUnindexed,
-                               "cs_method_typed_unindexed");
+    /* c.Missing() — the receiver type Counter is known but the method Missing is
+     * ABSENT (no extension matches either), so the synthetic target has no node
+     * and no CALLS edge can target it. Assert the accurate no-resolvable-edge
+     * behaviour instead of a strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("Client.cs", kCsMethodTypedUnindexed, "Missing");
 }
 
 TEST(repro_lsp_cs_self_method) {

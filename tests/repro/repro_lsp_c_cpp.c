@@ -137,6 +137,35 @@ static int assert_lsp_strategy(const char *filename, const char *src,
     return rc;
 }
 
+/*
+ * assert_no_resolvable_edge — the ACCURATE invariant for a call whose callee is
+ * genuinely UNRESOLVABLE (undeclared, or an external/DLL symbol with no body in
+ * the indexed tree). No node can exist for such a callee, so no CALLS edge can
+ * ever target it and no resolution strategy can land on an edge. Index the
+ * single-file fixture and assert NO CALLS edge targets a node whose QN contains
+ * `callee_substr`. Returns 0 on PASS, non-zero on FAIL.
+ */
+static int assert_no_resolvable_edge(const char *filename, const char *src,
+                                     const char *callee_substr) {
+    RProj lp;
+    cbm_store_t *store = rh_index(&lp, filename, src);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for no-edge callee %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, callee_substr);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    if (!inv_no_calls_edge_to_qn(store, lp.project, callee_substr)) {
+        printf("  %sFAIL%s %s:%d: a CALLS edge unexpectedly targets %s "
+               "(expected NONE — callee is unresolvable)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
 /* ── Fixtures ────────────────────────────────────────────────────────────────
  *
  * Each fixture is the MINIMAL construct c_lsp.c keys on for one strategy. The
@@ -408,7 +437,11 @@ TEST(repro_lsp_cpp_func_ptr) {
 }
 
 TEST(repro_lsp_cpp_dll_resolve) {
-    return assert_lsp_strategy("main.cpp", kDllResolve, "lsp_dll_resolve");
+    /* plugin_entry is an EXTERNAL symbol (extern decl, no body in the indexed
+     * tree) — no node exists for it, so no CALLS edge can ever target it. The
+     * "external."-prefixed lsp_dll_resolve strategy is unsynthesizable from a
+     * single file by design; assert the accurate no-resolvable-edge behaviour. */
+    return assert_no_resolvable_edge("main.cpp", kDllResolve, "plugin_entry");
 }
 
 TEST(repro_lsp_cpp_operator) {
@@ -437,7 +470,10 @@ TEST(repro_lsp_cpp_adl) {
 }
 
 TEST(repro_lsp_cpp_unresolved) {
-    return assert_lsp_strategy("main.cpp", kUnresolved, "lsp_unresolved");
+    /* totally_unknown_fn is UNDECLARED — no node can exist for it, so no CALLS
+     * edge can ever form. Assert the accurate no-resolvable-edge behaviour
+     * instead of a resolution strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("main.cpp", kUnresolved, "totally_unknown_fn");
 }
 
 /* ── Suite ───────────────────────────────────────────────────────────────── */
