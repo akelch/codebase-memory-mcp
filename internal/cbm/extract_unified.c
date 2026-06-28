@@ -377,6 +377,17 @@ static const char *compute_class_qn(CBMExtractCtx *ctx, TSNode node, const WalkS
     if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_OBJC) {
         name_node = cbm_find_child_by_kind(node, "identifier");
     }
+    /* Rust: impl_item has no `name` field; the implementing type is in the `type`
+     * field (`impl Calc {...}` / `impl Trait for Calc {...}` both -> Calc). The
+     * dedicated impl handler in push_boundary_scopes is dead code (impl_item is in
+     * rust_class_types, so the class branch runs first and lands here), so resolve
+     * the type here. Without a class scope, an impl method's QN drops the type
+     * (proj.file.method) and no longer matches the class-qualified def-side Method
+     * node, so in-body calls fall back to the Module. */
+    if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_RUST &&
+        strcmp(ts_node_type(node), "impl_item") == 0) {
+        name_node = ts_node_child_by_field_name(node, TS_FIELD("type"));
+    }
     if (ts_node_is_null(name_node)) {
         return NULL;
     }
