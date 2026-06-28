@@ -197,6 +197,19 @@ TEST(log_format_from_env) {
     PASS();
 }
 
+TEST(log_format_is_explicit_only) {
+    cbm_unsetenv("CBM_LOG_FORMAT");
+    cbm_setenv("ENVIRONMENT", "production", 1);
+    cbm_setenv("K_SERVICE", "cbm", 1);
+    cbm_log_set_format(CBM_LOG_FORMAT_TEXT);
+    cbm_log_init_from_env();
+    ASSERT_EQ(cbm_log_get_format(), CBM_LOG_FORMAT_TEXT);
+
+    cbm_unsetenv("ENVIRONMENT");
+    cbm_unsetenv("K_SERVICE");
+    PASS();
+}
+
 /* CBM_LOG_LEVEL parsing — distilled from #414 (closes #413). */
 TEST(log_level_from_env_textual) {
     cbm_setenv("CBM_LOG_LEVEL", "error", 1);
@@ -281,6 +294,7 @@ SUITE(log) {
     RUN_TEST(log_sink_tee_keeps_stderr);
     RUN_TEST(log_operational_helpers);
     RUN_TEST(log_format_from_env);
+    RUN_TEST(log_format_is_explicit_only);
     RUN_TEST(log_level_from_env_textual);
     RUN_TEST(log_level_from_env_numeric);
     RUN_TEST(log_level_from_env_invalid_ignored);

@@ -66,11 +66,9 @@ parse_format:;
         return;
     }
 
-    const char *env = getenv("ENVIRONMENT");
-    const char *cloud_run = getenv("K_SERVICE");
-    if ((env && strcmp(env, "production") == 0) || (cloud_run && cloud_run[0] != '\0')) {
-        cbm_log_set_format(CBM_LOG_FORMAT_JSON);
-    }
+    /* Format is intentionally explicit-only. Logs stay local to stderr and the
+     * optional in-process sink; deployment environment variables must not
+     * silently change the operator-selected output shape. */
 }
 
 void cbm_log_set_sink(cbm_log_sink_fn fn) {

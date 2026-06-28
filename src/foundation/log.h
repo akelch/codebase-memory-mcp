@@ -4,7 +4,7 @@
  * Design:
  *   - All output goes to stderr (stdout is reserved for MCP JSON-RPC)
  *   - Structured text format: "level=info msg=pass.timing pass=defs elapsed_ms=42"
- *   - Optional JSON format for production collectors / Cloud Logging
+ *   - Optional JSON format for local structured parsing
  *   - Levels: DEBUG, INFO, WARN, ERROR
  *   - Level filtering at runtime via cbm_log_set_level() or the
  *     CBM_LOG_LEVEL env var (see cbm_log_init_from_env)
@@ -40,9 +40,8 @@ typedef enum {
  * the numeric equivalents 0..4 matching CBMLogLevel. Unknown, empty, or
  * unset values leave the level unchanged (fail-open).
  *
- * Also applies CBM_LOG_FORMAT=text|json. If unset, JSON is auto-enabled for
- * production / Cloud Run style environments (ENVIRONMENT=production or
- * K_SERVICE present). Call once at startup before any threads or log lines. */
+ * Also applies CBM_LOG_FORMAT=text|json. If unset, the current format is left
+ * unchanged. Call once at startup before any threads or log lines. */
 void cbm_log_init_from_env(void);
 
 /* Set minimum log level (default: INFO). */
