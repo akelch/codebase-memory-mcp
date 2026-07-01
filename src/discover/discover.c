@@ -778,8 +778,9 @@ static bool resolve_git_common_dir(const char *repo_path, char *common_dir, size
         return false;
     }
 
-    /* Linked worktree: parse "gitdir: <path>" from the gitlink file. */
-    FILE *f = fopen(dot_git, "r");
+    /* Linked worktree: parse "gitdir: <path>" from the gitlink file.
+     * cbm_fopen (not raw fopen) so non-ASCII repo paths open on Windows. */
+    FILE *f = cbm_fopen(dot_git, "r");
     if (!f) {
         return false;
     }
@@ -811,7 +812,7 @@ static bool resolve_git_common_dir(const char *repo_path, char *common_dir, size
      * (typically a relative path like "../.."). Absent in single-worktree gitdirs. */
     char commondir_path[CBM_SZ_4K];
     path_join(commondir_path, sizeof(commondir_path), git_dir, "commondir");
-    FILE *cf = fopen(commondir_path, "r");
+    FILE *cf = cbm_fopen(commondir_path, "r");
     if (cf) {
         char cbuf[CBM_SZ_4K];
         bool resolved = false;
